@@ -28,6 +28,10 @@ static struct list ready_list;
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
 
+/* List of blocked processes.  Processes are added to this list
+   when they are sleeping */
+static struct list sleep_list;
+
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -92,6 +96,7 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+  list_init (&sleep_list);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -211,7 +216,50 @@ thread_create (const char *name, int priority,
 
   return tid;
 }
+/*
+스레드 블락 시키는 것과 재우는 것은 용도가 다를 듯 해서 일단 따로 만듬.
+현재 스레드를 재우는 함수다.
+*/
+void
+thread_sleep (int64_t ticks)//몇초동안 잘것인지를 나타내는 ticks
+{  
+  enum intr_level old_level;
+  old_level = intr_disable();//thread_block하려면 interrupt OFF해야돼서
 
+  struct thread* curThread = thread_current();
+  ASSERT (curThread != idle_thread);//idle 스레드를 재우면 안되니까
+
+  curThread -> wakeUpTime = ticks;//잘 시간 초기화하고
+  list_push_back (&sleep_list, &curThread->elem);//sleep리스트에 넣음.
+  thread_block();//이제 스레드 블락하고
+
+  intr_set_level(old_level);//interrupt ON
+}
+/*
+sleep_list를 돌면서 깨어날 스레드가 있나 확인하는 함수다.
+*/
+void
+thread_wakeup (int64_t ticks)//OS부팅되고 얼마나 지났는지를 나타내는 ticks
+{
+  struct list_elem * iter = list_begin(&sleep_list);
+  while(iter != list_end(&sleep_list))
+  {
+    struct thread* th = list_entry(iter, struct thread, elem);
+    //지난 시간 ticks가 해당 스레드의 wakeUpTime 보다 크면
+    //일어날 시간이 지났다는 뜻이니까 깨운다.
+    if (th->wakeUpTime <= ticks)
+    {
+      iter = list_remove (iter);//깨웠으니 sleep리스트에서 제거
+      thread_unblock (th); //레디큐로 보내기
+    }
+    else
+    {
+      iter = list_next(iter);//안 깨웠으니 그대로 다음 요소에게로
+    }
+
+  }
+
+}
 /* Puts the current thread to sleep.  It will not be scheduled
    again until awoken by thread_unblock().
 
@@ -223,8 +271,7 @@ thread_block (void)
 {
   ASSERT (!intr_context ());
   ASSERT (intr_get_level () == INTR_OFF);
-
-  thread_current ()->status = THREAD_BLOCKED;
+  thread_current() -> status = THREAD_BLOCKED;
   schedule ();
 }
 
@@ -312,14 +359,14 @@ thread_yield (void)
   struct thread *cur = thread_current ();
   enum intr_level old_level;
   
-  ASSERT (!intr_context ());
+  ASSERT (!intr_context ());//external interrupt OFF인 상태
 
-  old_level = intr_disable ();
+  old_level = intr_disable ();//internal interrupt OFF
   if (cur != idle_thread) 
     list_push_back (&ready_list, &cur->elem);
   cur->status = THREAD_READY;
   schedule ();
-  intr_set_level (old_level);
+  intr_set_level (old_level);//internal interrupt ON
 }
 
 /* Invoke function 'func' on all threads, passing along 'aux'.
