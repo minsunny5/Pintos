@@ -90,6 +90,12 @@ struct thread
     int priority;                       /* Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
     int64_t wakeUpTime; // 일어날 시간
+    
+    int origin_priority; //자신의 원래 priority
+    struct lock * desire_lock; //스레드가 요청하고 풀리길 기다리고 있는 락
+    struct list donation_list; //어떤 스레드에게서 도네 받았는지 리스트(multiple donation일 때)
+    struct list_elem donation_elem; //donation_list에 하나씩 접근하려면 필요한 list_elem
+
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
@@ -119,6 +125,9 @@ tid_t thread_create (const char *name, int priority, thread_func *, void *);
 
 void thread_sleep (int64_t ticks);
 void thread_wakeup (int64_t ticks);
+
+bool priority_greater (const struct list_elem *a_, const struct list_elem *b_, void *aux UNUSED);
+void thread_preemption_check();
 
 void thread_block (void);
 void thread_unblock (struct thread *);

@@ -214,6 +214,9 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
+  //스레드를 ready list에 추가했으니까 preemption 필요한지 확인하자.
+  thread_preemption_check();
+
   return tid;
 }
 /*
@@ -249,16 +252,14 @@ thread_wakeup (int64_t ticks)//OS부팅되고 얼마나 지났는지를 나타�
     //일어날 시간이 지났다는 뜻이니까 깨운다.
     if (th->wakeUpTime <= ticks)
     {
-      iter = list_remove (iter);//깨웠으니 sleep리스트에서 제거
+      iter = list_remove (iter); //깨웠으니 sleep리스트에서 제거
       thread_unblock (th); //레디큐로 보내기
     }
     else
     {
       iter = list_next(iter);//안 깨웠으니 그대로 다음 요소에게로
     }
-
   }
-
 }
 /* Puts the current thread to sleep.  It will not be scheduled
    again until awoken by thread_unblock().
@@ -292,9 +293,26 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+  //list_push_back (&ready_list, &t->elem);
+  list_insert_ordered(&ready_list, &t->elem, priority_greater, NULL);
   t->status = THREAD_READY;
   intr_set_level (old_level);
+}
+
+void
+thread_preemption_check()
+{
+  if(!list_empty(&ready_list))
+  {
+    const int maxPriorInReadyList = list_entry(list_begin(&ready_list), struct thread, elem)->priority;
+
+    //thread preemption이 일어나는 경우
+    if (thread_current() ->priority < maxPriorInReadyList)
+    {
+      //현재 스레드가 CPU를 양보함.
+      thread_yield();
+    }
+  }
 }
 
 /* Returns the name of the running thread. */
@@ -363,7 +381,10 @@ thread_yield (void)
 
   old_level = intr_disable ();//internal interrupt OFF
   if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+  {
+    //list_push_back (&ready_list, &cur->elem);
+    list_insert_ordered(&ready_list, &cur->elem, priority_greater, NULL);
+  } 
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);//internal interrupt ON
@@ -391,6 +412,13 @@ void
 thread_set_priority (int new_priority) 
 {
   thread_current ()->priority = new_priority;
+  //이 함수는 현재 priority뿐만 아니라 origin_priority를 수정하는 함수니까 이것도 수정해준다.
+  thread_current()->origin_priority = new_priority;
+
+  //혹시 이 함수로 priority가 바뀌었는데 donation list에 있는 스레드들보다 origin_priority가 높아졌을 수도 있으니
+  set_priority_again();
+  //현재 스레드의 priority를 변경했으니 preemption이 필요한지 체크한다.
+  thread_preemption_check();
 }
 
 /* Returns the current thread's priority. */
@@ -517,6 +545,11 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
+
+  t->origin_priority = priority;
+  t->desire_lock = NULL;
+  list_init(&t->donation_list);
+
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
@@ -543,7 +576,12 @@ next_thread_to_run (void)
   if (list_empty (&ready_list))
     return idle_thread;
   else
+  {
+    //ready queue안에서도 priority donation이 일어났다면 sort를 다시 해야되니까
+    list_sort(&ready_list, priority_greater, 0);
     return list_entry (list_pop_front (&ready_list), struct thread, elem);
+  }
+    
 }
 
 /* Completes a thread switch by activating the new thread's page
@@ -632,3 +670,16 @@ allocate_tid (void)
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
+
+
+/* Returns true if value A is greater than value B, false
+   otherwise. */
+bool
+priority_greater (const struct list_elem *a_, const struct list_elem *b_,
+            void *aux UNUSED) 
+{
+  const struct thread *a = list_entry (a_, struct thread, elem);
+  const struct thread *b = list_entry (b_, struct thread, elem);
+  
+  return a->priority > b->priority;
+}

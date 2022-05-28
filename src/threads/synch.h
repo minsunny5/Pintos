@@ -30,6 +30,11 @@ bool lock_try_acquire (struct lock *);
 void lock_release (struct lock *);
 bool lock_held_by_current_thread (const struct lock *);
 
+void set_priority_again();
+void remove_from_donator(struct lock *lock);
+bool priority_greater_in_donation_list(const struct list_elem *a_, const struct list_elem *b_,
+            void *aux);
+
 /* Condition variable. */
 struct condition 
   {
@@ -40,6 +45,9 @@ void cond_init (struct condition *);
 void cond_wait (struct condition *, struct lock *);
 void cond_signal (struct condition *, struct lock *);
 void cond_broadcast (struct condition *, struct lock *);
+
+bool sema_priority_greater (const struct list_elem *a_, const struct list_elem *b_,
+            void *aux );
 
 /* Optimization barrier.
 
