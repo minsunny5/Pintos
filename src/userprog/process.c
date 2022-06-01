@@ -36,12 +36,21 @@ process_execute (const char *file_name)
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
-  strlcpy (fn_copy, file_name, PGSIZE);
+  strlcpy (fn_copy, file_name, PGSIZE); //strlcpy (dst, src, dst size);
 
+  /* Tokenize fn_copy to get arguments(argv) from file_name. 
+  스레드 만들기 전에 argument 파싱을 해야 argument 제외하고 딱 실행 파일명으로 스레드를 만들 수 있다.*/
+  char *exe_name, *save_ptr;
+  char fn_copy2[128];//핀토스는 128바이트 제한이랬으니 그것보단 적게 들어오지않을까
+  strlcpy (fn_copy2, file_name, sizeof(fn_copy2));
+  exe_name = strtok_r (fn_copy2, " ", &save_ptr);//strtok_r함수는 fn_copy2를 수정해버리니까
+  
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (exe_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+  {
+    palloc_free_page (fn_copy);
+  }
   return tid;
 }
 
@@ -54,17 +63,23 @@ start_process (void *file_name_)
   struct intr_frame if_;
   bool success;
 
-  /* Initialize interrupt frame and load executable. */
+  /* Initialize interrupt frame */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
+
+  /* load executable. */
   success = load (file_name, &if_.eip, &if_.esp);
+  //success = load (exe_name, &if_.eip, &if_.esp);
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success) 
     thread_exit ();
+
+  //argument도 로드가 잘되었는지 디버깅
+  hex_dump(if_.esp , if_.esp , PHYS_BASE - if_.esp , true);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -75,6 +90,8 @@ start_process (void *file_name_)
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED ();
 }
+
+
 
 /* Waits for thread TID to die and returns its exit status.  If
    it was terminated by the kernel (i.e. killed due to an
@@ -114,6 +131,7 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+  //printf ("%s: exit(%d)\n", cur->name, );
 }
 
 /* Sets up the CPU for running user code in the current
@@ -195,7 +213,7 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack (void **esp);
+static bool setup_stack (void **esp, char** argv, int argc);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -221,11 +239,28 @@ load (const char *file_name, void (**eip) (void), void **esp)
     goto done;
   process_activate ();
 
+  /* Tokenize fn_copy to get arguments(argv) from file_name. 
+  파일 열기 전에 argument 파싱을 해야 딱 실행 파일명만 입력할 수 있다.*/
+  char *file_name_copy[128];
+  strlcpy (file_name_copy, file_name, strlen(file_name)+1);
+  char *token, *save_ptr;
+  int argc = 0; //arguments count
+  char *argv[128];//argument list
+
+  for (token = strtok_r (file_name_copy, " ", &save_ptr); token != NULL;
+        token = strtok_r (NULL, " ", &save_ptr))
+  {
+    argv[argc] = token;
+    argc++;
+  }
+
+  char* exe_name = argv[0];
+
   /* Open executable file. */
-  file = filesys_open (file_name);
+  file = filesys_open (exe_name);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      printf ("load: %s: open failed\n", exe_name);
       goto done; 
     }
 
@@ -302,7 +337,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp))
+  if (!setup_stack (esp, argv, argc))
     goto done;
 
   /* Start address. */
@@ -425,22 +460,77 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 }
 
 /* Create a minimal stack by mapping a zeroed page at the top of
-   user virtual memory. */
+   user virtual memory. and Initialize stack with arguments. */
 static bool
-setup_stack (void **esp) 
+setup_stack (void **esp, char** argv, int argc) 
 {
+  /* Create a minimal stack by mapping a zeroed page at the top of
+   user virtual memory.*/
   uint8_t *kpage;
   bool success = false;
 
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
   if (kpage != NULL) 
+  {
+    success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+    if (success)
     {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success)
-        *esp = PHYS_BASE;
-      else
-        palloc_free_page (kpage);
+      /*esp를 유저가상메모리의 최상단으로 초기화*/
+      *esp = PHYS_BASE;
+
+      /* put arguments to stack */
+      char* arg_address_in_stack[128];
+      int i;
+      //뭐 하나를 스택에 넣기 전에 스택포인터(아무것도 안넣으면 PHYS_BASE라서)를 그 크기만큼 아래로 내려줘야한다.
+      for (i = argc-1; i >= 0; i--)
+      {
+        int arg_size = strlen(*(argv+i)) + 1;// 널문자 넣을 공간도 있어야돼서 +1
+        *esp -= arg_size; // 그 문자개수(각각 1바이트짜리라)만큼 스택포인터 esp를 내려준다.
+        memcpy(*esp, *(argv+i), arg_size); //esp 내려서 생긴 공간에 argv[i]를 argv_size크기만큼 복사해서 넣어준다.
+        arg_address_in_stack[i] = *esp; //주소는 4바이트로 맞춰주기
+      }
+
+      while ((uint32_t)*esp % 4 != 0)//arg data 다넣고 나서 스택포인터의 위치가 4의 배수가 아닐 때 word allign
+      {
+        (*esp)--;
+        memset(*esp, 0, sizeof(char)); //스택포인터의 위치가 4의 배수가 될 때까지 dummy 값을 넣어준다.(padding)
+      }
+
+      //이제 arg_address_in_stack을 스택에 넣어주자.
+      for (i = argc; i >= 0; i--)
+      {
+        //일단 주소(무조건 4바이트짜리)를 넣을 공간부터 만들어야되니까 esp를 내려준다.
+        *esp -= 4;
+        //생긴 공간에 주소를 차례로 넣어준다.
+        if(i == argc)
+        {
+          memset(*esp, 0, sizeof(int*));
+        }
+        else
+        {
+          memcpy(*esp, &arg_address_in_stack[i], sizeof(uint32_t**));
+        }
+      }
+      
+      //이제 argv 시작주소값(스택의 어디에 들어있는지)을 넣고 argc 넣으면 된다.
+      //먼저 자리 만들고
+      *esp -= 4;
+      *(uintptr_t**)*esp = *esp + 4;//그림보면 아까 argv[0]를 저장한 바로 그 주소(if_->esp + 4)를 넣는다.
+
+      //또 argc넣을 자리 만들고 넣어준다.
+      *esp -= 4;
+      *(int*)*esp = argc;//원래 이것도 memset으로 했는데 0으로 초기화할 때 쓰는거아니면 문제생길 수 있대서 바꿈.
+
+      //마지막에는 return address자리에 fake address를 넣어줘야한다.
+      *esp -= 4;
+      memset(*esp, 0, sizeof(int*));
+
     }
+      
+    else
+      palloc_free_page (kpage);
+  }
+
   return success;
 }
 

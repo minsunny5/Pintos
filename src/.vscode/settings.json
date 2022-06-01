@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "exception.h": "c",
+        "stdio.h": "c"
+    }
+}
