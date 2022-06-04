@@ -103,6 +103,7 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+  initial_thread->parent = NULL;
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -189,6 +190,17 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
+  struct thread* cur = thread_current();
+  //지금 스레드가 자식프로세스(name)를 만드는 중이므로 부모 프로세스 초기화하기
+  t->parent = cur;
+  //exit 여부 변수 초기화
+  t->is_exit = false;
+  //자식 프로세스 t가 끝날 때까지 기다리는 semaphore, 아직 부모한테서 안받았으니 null로 초기화
+  t->sema_exit = NULL;
+  //부모 프로세스의 자식 리스트에 지금 만들고 있는 스레드(name)를 추가하기
+  list_push_back(&(cur->child_list), &t->child_elem);
+
+
   /* Prepare thread for first run by initializing its stack.
      Do this atomically so intermediate values for the 'stack' 
      member cannot be observed. */
@@ -216,6 +228,28 @@ thread_create (const char *name, int priority,
 
   return tid;
 }
+
+/* Search specific thread in current thread's child list by pid. 
+pid 프로세스가 child process list에 있다는 뜻 : 아직 exit되지 않았고
+*/
+struct thread*
+get_child_process(tid_t pid)
+{
+  struct thread* cur = thread_current();
+  struct list_elem *e;
+  for (e = list_begin(&cur->child_list); e != list_end(&cur->child_list); 
+      e = list_next(e))
+  {
+    struct thread* child = list_entry(e, struct thread, child_elem);
+    //pid인 프로세스를 찾았다면
+    if (child->tid == pid)
+    {
+      return child;
+    }
+  }
+  return NULL;
+}
+
 /*
 스레드 블락 시키는 것과 재우는 것은 용도가 다를 듯 해서 일단 따로 만듬.
 현재 스레드를 재우는 함수다.
@@ -346,6 +380,14 @@ thread_exit (void)
      when it calls thread_schedule_tail(). */
   intr_disable ();
   list_remove (&thread_current()->allelem);
+
+  //나의 부모 프로세스가 존재한다면 부모프로세스의 child list에서 본인을 제거한다.
+  if(thread_current()->parent != NULL)
+  {
+    remove_child(thread_current());
+  }
+  thread_current()->is_exit = true;
+  sema_up(thread_current()->sema_exit);
   thread_current ()->status = THREAD_DYING;
   schedule ();
   NOT_REACHED ();
@@ -517,6 +559,8 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
+
+  list_init(&(initial_thread->child_list));
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and

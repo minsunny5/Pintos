@@ -17,6 +17,7 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/synch.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -71,7 +72,6 @@ start_process (void *file_name_)
 
   /* load executable. */
   success = load (file_name, &if_.eip, &if_.esp);
-  //success = load (exe_name, &if_.eip, &if_.esp);
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
@@ -79,7 +79,7 @@ start_process (void *file_name_)
     thread_exit ();
 
   //argument도 로드가 잘되었는지 디버깅
-  hex_dump(if_.esp , if_.esp , PHYS_BASE - if_.esp , true);
+  hex_dump((uintptr_t)if_.esp , if_.esp , PHYS_BASE - if_.esp , true);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -103,10 +103,39 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
-  return -1;
+  struct semaphore sema_exit; //= thread_current()->sema_exit;
+  struct thread* child = get_child_process(child_tid);
+
+  if (child == NULL)
+    return -1;
+  //만약 pid가 exit을 호출하지 않았는데 
+  //커널에 의해 종료되었다면(ex.예외상황에 걸려서 kill당했다던가) 
+  if (child->is_exit)
+    return -1;
+  //child_tid를 누군가가 이미 기다리고 있는 상황이라면 똑같은 child를 또 기다릴 수 없다.
+  if (child->sema_exit != NULL)
+    return -1;
+
+  /*waiting*/ 
+  //tid로 프로세스를 찾아서 그 프로세스에 sema를 넘겨줘야됨.
+  sema_init(&sema_exit, 0);//부모의 세마포어 초기화
+  child->sema_exit = &sema_exit;//자식에게 부모의 세마포어 넘겨주기
+  sema_down(&sema_exit);//부모가 블록되고 아까 process_execute에서 만든 유저프로세스 실행
+  //유저 프로세스(자식) 실행을 마치면
+  
+  return child->exit_status;
 }
+
+void
+remove_child(struct thread* child)
+{
+  ASSERT (!list_empty(&child->parent->child_list));
+  
+  list_remove(&child->child_elem);
+}
+
 
 /* Free the current process's resources. */
 void
@@ -131,7 +160,6 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
-  //printf ("%s: exit(%d)\n", cur->name, );
 }
 
 /* Sets up the CPU for running user code in the current
@@ -241,7 +269,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
   /* Tokenize fn_copy to get arguments(argv) from file_name. 
   파일 열기 전에 argument 파싱을 해야 딱 실행 파일명만 입력할 수 있다.*/
-  char *file_name_copy[128];
+  char file_name_copy[128];
   strlcpy (file_name_copy, file_name, strlen(file_name)+1);
   char *token, *save_ptr;
   int argc = 0; //arguments count

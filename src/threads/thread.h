@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "threads/synch.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -90,7 +91,15 @@ struct thread
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
-    int64_t wakeUpTime; // 일어날 시간
+    
+    int64_t wakeUpTime; // [project1] 일어날 시간
+
+    int exit_status; // [project2] exit code
+    bool is_exit;
+    struct thread* parent; //부모 프로세스
+    struct list child_list; //자식 프로세스 리스트
+    struct list_elem child_elem; // List element for child process list
+    struct semaphore* sema_exit; // 자식 프로세스를 기다리기 위해 필요한 semaphore exit()에서 up
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
@@ -118,6 +127,7 @@ void thread_print_stats (void);
 typedef void thread_func (void *aux);
 tid_t thread_create (const char *name, int priority, thread_func *, void *);
 
+//project1
 void thread_sleep (int64_t ticks);
 void thread_wakeup (int64_t ticks);
 
@@ -142,5 +152,8 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+//project2
+struct thread* get_child_process(tid_t pid);
 
 #endif /* threads/thread.h */

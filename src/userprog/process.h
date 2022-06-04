@@ -8,4 +8,6 @@ int process_wait (tid_t);
 void process_exit (void);
 void process_activate (void);
 
+void remove_child(struct thread* child);
+
 #endif /* userprog/process.h */

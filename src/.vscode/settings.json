@@ -1,6 +1,10 @@
 {
     "files.associations": {
         "exception.h": "c",
-        "stdio.h": "c"
+        "stdio.h": "c",
+        "syscall-nr.h": "c",
+        "cstdlib": "c",
+        "interrupt.h": "c",
+        "libc-header-start.h": "c"
     }
 }
