@@ -22,7 +22,7 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f) 
 {
-  int* arg_buf[3];// 시스템콜 인수 최대 3개
+  void* arg_buf[3];// 시스템콜 인수 최대 3개
   int* esp = f->esp;//user stack pointer
 
   IsValidAddr(esp);
@@ -39,12 +39,12 @@ syscall_handler (struct intr_frame *f)
       break;
     case SYS_EXIT:
       get_args_addr(esp, arg_buf, 1);
-      exit(*arg_buf[0]);
+      exit(*(int*)arg_buf[0]);
       memset(arg_buf, 0, sizeof(arg_buf));
       break;
     case SYS_EXEC:
       get_args_addr(esp, arg_buf, 1);
-      f->eax = exec(*(const char*)arg_buf[0]);
+      f->eax = exec((const char*)arg_buf[0]);
       memset(arg_buf, 0, sizeof(arg_buf));
       break;
     case SYS_WAIT:
@@ -83,12 +83,12 @@ syscall_handler (struct intr_frame *f)
   //thread_exit ();
 }
 
-void get_args_addr(void* esp, int** argument_arr, int cnt)
+void get_args_addr(void* esp, void** argument_arr, int cnt)
 {
   int i;
   for(i = 0; i < cnt; i++)
   {
-    int* addr = esp + 4 * (i+1);
+    void* addr = esp + 4 * (i+1);
     IsValidAddr(addr);
     argument_arr[i] = addr;
   }

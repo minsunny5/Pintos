@@ -9,7 +9,7 @@ typedef int pid_t;
 
 void syscall_init (void);
 
-void get_args_addr(void* esp, int** argument_arr, int cnt);
+void get_args_addr(void* esp, void** argument_arr, int cnt);
 void IsValidAddr(const void* addr);
 
 void halt (void) NO_RETURN;
