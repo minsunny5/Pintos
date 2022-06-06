@@ -191,12 +191,14 @@ thread_create (const char *name, int priority,
   tid = t->tid = allocate_tid ();
 
   struct thread* cur = thread_current();
-  //지금 스레드가 자식프로세스(name)를 만드는 중이므로 부모 프로세스 초기화하기
+  //현재 프로세스가 자식프로세스(name)를 만드는 중이므로 부모를 현재 프로세스로 초기화하기
   t->parent = cur;
-  //exit 여부 변수 초기화
+  //exit 여부, load 여부 변수 초기화
   t->is_exit = false;
-  //자식 프로세스 t가 끝날 때까지 기다리는 semaphore, 아직 부모한테서 안받았으니 null로 초기화
+  t->is_load = false;
+  //자식 프로세스 t가 sema_up할 때까지 기다리는 semaphore, 아직 부모한테서 안받았으니 null로 초기화
   t->sema_exit = NULL;
+  t->sema_load = NULL;
   //부모 프로세스의 자식 리스트에 지금 만들고 있는 스레드(name)를 추가하기
   list_push_back(&(cur->child_list), &t->child_elem);
 
@@ -381,14 +383,14 @@ thread_exit (void)
   intr_disable ();
   list_remove (&thread_current()->allelem);
 
-  //나의 부모 프로세스가 존재한다면 부모프로세스의 child list에서 본인을 제거한다.
-  if(thread_current()->parent != NULL)
-  {
-    remove_child(thread_current());
-  }
+  
   thread_current()->is_exit = true;
+  //4. 유저프로세스가 일을 마치고나면 sema_up()해줘서 
+  //아까 down해놨던 initial thread(부모 프로세스)가 다시 진행될 수 있게 unblock해준다.
   sema_up(thread_current()->sema_exit);
   thread_current ()->status = THREAD_DYING;
+  //아까 sema_up해서 레디큐에 들어있던 initial thread(부모 프로세스)가 
+  //언젠가 자기 차례가 와서 다시 진행될 수 있게 schedule 해준다.
   schedule ();
   NOT_REACHED ();
 }
@@ -632,7 +634,9 @@ thread_schedule_tail (struct thread *prev)
   if (prev != NULL && prev->status == THREAD_DYING && prev != initial_thread) 
     {
       ASSERT (prev != cur);
-      palloc_free_page (prev);
+      //palloc_free_page (prev);
+      //여러 함수(ex.process_wait)에서 자식의 exit code를 받아오기 위해 exit한 자식 스레드를 schedule한다고 삭제하지 않게 수정.
+      //대신 나중에 정보를 사용하는 함수(ex.process_wait)에서 정보를 사용하고 삭제한다.
     }
 }
 

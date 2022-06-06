@@ -83,35 +83,36 @@ typedef int tid_t;
    ready state is on the run queue, whereas only a thread in the
    blocked state is on a semaphore wait list. */
 struct thread
-  {
-    /* Owned by thread.c. */
-    tid_t tid;                          /* Thread identifier. */
-    enum thread_status status;          /* Thread state. */
-    char name[16];                      /* Name (for debugging purposes). */
-    uint8_t *stack;                     /* Saved stack pointer. */
-    int priority;                       /* Priority. */
-    struct list_elem allelem;           /* List element for all threads list. */
-    
-    int64_t wakeUpTime; // [project1] 일어날 시간
+{
+   /* Owned by thread.c. */
+   tid_t tid;                          /* Thread identifier. */
+   enum thread_status status;          /* Thread state. */
+   char name[16];                      /* Name (for debugging purposes). */
+   uint8_t *stack;                     /* Saved stack pointer. */
+   int priority;                       /* Priority. */
+   struct list_elem allelem;           /* List element for all threads list. */
+   
+   int64_t wakeUpTime; // [project1] 일어날 시간
 
-    int exit_status; // [project2] exit code
-    bool is_exit;
-    struct thread* parent; //부모 프로세스
-    struct list child_list; //자식 프로세스 리스트
-    struct list_elem child_elem; // List element for child process list
-    struct semaphore* sema_exit; // 자식 프로세스를 기다리기 위해 필요한 semaphore exit()에서 up
-
-    /* Shared between thread.c and synch.c. */
-    struct list_elem elem;              /* List element. */
+   int exit_status; // [project2] exit code
+   bool is_exit;
+   bool is_load;
+   struct thread* parent; //부모 프로세스
+   struct list child_list; //자식 프로세스 리스트
+   struct list_elem child_elem; // List element for child process list
+   struct semaphore* sema_exit; // 자식 프로세스를 기다리기 위해 사용하는 세마포어. exit()에서 up
+   struct semaphore* sema_load; // 자식 유저 프로세스가 실행파일을 로드하기까지 기다리기 위해 사용하는 세마포어. load()마치고 up
+   /* Shared between thread.c and synch.c. */
+   struct list_elem elem;              /* List element. */
 
 #ifdef USERPROG
-    /* Owned by userprog/process.c. */
-    uint32_t *pagedir;                  /* Page directory. */
+   /* Owned by userprog/process.c. */
+   uint32_t *pagedir;                  /* Page directory. */
 #endif
 
-    /* Owned by thread.c. */
-    unsigned magic;                     /* Detects stack overflow. */
-  };
+   /* Owned by thread.c. */
+   unsigned magic;                     /* Detects stack overflow. */
+};
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.

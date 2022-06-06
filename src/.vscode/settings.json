@@ -5,6 +5,7 @@
         "syscall-nr.h": "c",
         "cstdlib": "c",
         "interrupt.h": "c",
-        "libc-header-start.h": "c"
+        "libc-header-start.h": "c",
+        "thread.h": "c"
     }
 }

@@ -75,11 +75,19 @@ start_process (void *file_name_)
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
-  if (!success) 
+  if (!success)
+  {
+    thread_current()->is_load = false;
+    sema_up(thread_current()->sema_load);
     thread_exit ();
+  }
 
   //argument도 로드가 잘되었는지 디버깅
   hex_dump((uintptr_t)if_.esp , if_.esp , PHYS_BASE - if_.esp , true);
+
+  /* If load successed */
+  thread_current()->is_load = true;
+  sema_up(thread_current()->sema_load);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -107,6 +115,7 @@ process_wait (tid_t child_tid)
 {
   struct semaphore sema_exit; //= thread_current()->sema_exit;
   struct thread* child = get_child_process(child_tid);
+  int exit_status;
 
   if (child == NULL)
     return -1;
@@ -123,17 +132,27 @@ process_wait (tid_t child_tid)
   sema_init(&sema_exit, 0);//부모의 세마포어 초기화
   child->sema_exit = &sema_exit;//자식에게 부모의 세마포어 넘겨주기
   sema_down(&sema_exit);//부모가 블록되고 아까 process_execute에서 만든 유저프로세스 실행
-  //유저 프로세스(자식) 실행을 마치면
   
-  return child->exit_status;
+  //자식 프로세스 실행을 마치면
+  exit_status = child->exit_status;//자식의 exit status를 받아오고
+  //유저 프로세스의 자식이든 initial thread의 자식인 유저프로세스이든
+  //process_wait가 불리기 때문에 여기서 메모리 해제를 하면 된다.
+  remove_child(child);
+  
+  return exit_status;//자식의 exit status 반환
 }
 
 void
 remove_child(struct thread* child)
 {
   ASSERT (!list_empty(&child->parent->child_list));
-  
-  list_remove(&child->child_elem);
+  //나의 부모 프로세스가 존재한다면 
+  if(child->parent != NULL)
+  {
+    //부모프로세스의 child list에서 (현재 exit하고 있는)본인을 제거한다.
+    list_remove(&child->child_elem);
+  }
+  palloc_free_page(child);//자식의 프로세스 디스크립터 메모리를 해제한다.
 }
 
 

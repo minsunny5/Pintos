@@ -43,6 +43,9 @@ syscall_handler (struct intr_frame *f)
       memset(arg_buf, 0, sizeof(arg_buf));
       break;
     case SYS_EXEC:
+      get_args_addr(esp, arg_buf, 1);
+      f->eax = exec(*(const char*)arg_buf[0]);
+      memset(arg_buf, 0, sizeof(arg_buf));
       break;
     case SYS_WAIT:
       get_args_addr(esp, arg_buf, 1);
@@ -121,14 +124,29 @@ void exit (int status)
   cur->exit_status = status;
   printf ("%s: exit(%d)\n", cur->name, status);
   thread_exit();
-  
 }
 
 /*User Process가 자식 프로세스를 만드려면 사용하는 함수*/
 pid_t exec (const char *cmd_line)
 {
   //process_execute로 자식 프로세스 생성
-  //
+  pid_t child_pid = process_execute(cmd_line);
+  //생성된 자식 프로세스를 가져오기
+  struct thread* child = get_child_process(child_pid);
+
+  //sema_down()으로 자식 프로세스가 로드를 마칠때까지 대기하기
+  struct semaphore sema_load;
+  sema_init(&sema_load, 0);
+  child->sema_load = &sema_load;
+  sema_down(&sema_load);
+
+  //대기를 마치고
+  //프로그램 load 실패시, -1 반환
+  if(child->is_load == false)
+    return -1;
+  
+  //프로그램 load 성공시, 자식 프로세스의 pid 반환
+  return child_pid;
 }
 
 int wait (pid_t pid)
