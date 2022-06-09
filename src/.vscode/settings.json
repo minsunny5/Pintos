@@ -6,6 +6,19 @@
         "cstdlib": "c",
         "interrupt.h": "c",
         "libc-header-start.h": "c",
-        "thread.h": "c"
+        "thread.h": "c",
+        "list.h": "c",
+        "file.h": "c",
+        "debug.h": "c",
+        "inode.h": "c",
+        "*.inc": "c",
+        "*.tcc": "c",
+        "exception": "c",
+        "fstream": "c",
+        "iosfwd": "c",
+        "new": "c",
+        "ostream": "c",
+        "sstream": "c",
+        "streambuf": "c"
     }
 }

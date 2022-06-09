@@ -202,6 +202,12 @@ thread_create (const char *name, int priority,
   //부모 프로세스의 자식 리스트에 지금 만들고 있는 스레드(name)를 추가하기
   list_push_back(&(cur->child_list), &t->child_elem);
 
+  //파일 디스크립터 배열 메모리 할당 및 초기화
+  t->fd_arr = palloc_get_page(PAL_ZERO);
+  if (t->fd_arr == NULL)
+    return FILE_DESC_ERROR;
+  t->fd_idx = 2;//파일 디스크립터는 0,1은 표준입출력으로 예약되어있어서 2부터 시작이니까 2로 초기화
+
 
   /* Prepare thread for first run by initializing its stack.
      Do this atomically so intermediate values for the 'stack' 
@@ -382,12 +388,16 @@ thread_exit (void)
      when it calls thread_schedule_tail(). */
   intr_disable ();
   list_remove (&thread_current()->allelem);
-
   
   thread_current()->is_exit = true;
   //4. 유저프로세스가 일을 마치고나면 sema_up()해줘서 
   //아까 down해놨던 initial thread(부모 프로세스)가 다시 진행될 수 있게 unblock해준다.
-  sema_up(thread_current()->sema_exit);
+  //문제가 생겨서 exit할때는 sema_exit이 sema_down되어있지 않을 수도 있다.
+  if(thread_current()->sema_exit != NULL)
+  {
+    printf("thread_exit: Thread %d, %s exit sema up\n",thread_current()->tid, thread_current()->name);
+    sema_up(thread_current()->sema_exit);
+  }
   thread_current ()->status = THREAD_DYING;
   //아까 sema_up해서 레디큐에 들어있던 initial thread(부모 프로세스)가 
   //언젠가 자기 차례가 와서 다시 진행될 수 있게 schedule 해준다.
@@ -562,7 +572,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
 
-  list_init(&(initial_thread->child_list));
+  list_init(&(t->child_list));
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and

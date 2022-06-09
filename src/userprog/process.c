@@ -18,9 +18,11 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/synch.h"
+#include "userprog/syscall.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -51,7 +53,27 @@ process_execute (const char *file_name)
   if (tid == TID_ERROR)
   {
     palloc_free_page (fn_copy);
+  } 
+  
+  //생성된 자식 프로세스를 가져오기
+  struct thread* child = get_child_process(tid);
+
+  //sema_down()으로 자식 프로세스가 로드를 마칠때까지 대기하기
+  struct semaphore sema_load;
+  sema_init(&sema_load, 0);
+  child->sema_load = &sema_load;
+  printf("process execute: Thread %d, %s load sema down\n",thread_current()->tid, thread_current()->name);
+  sema_down(&sema_load);
+
+  //대기를 마치고
+  //프로그램 load 실패시, -1 반환
+  if(child->is_load == false)
+  {
+   //printf ("ERROR]] LOAD FAIL");
+    return -1;
   }
+
+  //프로그램 load 성공시, 자식 프로세스의 tid(=pid) 반환
   return tid;
 }
 
@@ -70,25 +92,39 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
 
+  
+  //printf("Loading..Thread %d, %s acquire file lock\n",thread_current()->tid, thread_current()->name);
+  lock_acquire(&load_lock);
   /* load executable. */
   success = load (file_name, &if_.eip, &if_.esp);
-
+  
   /* If load failed, quit. */
   palloc_free_page (file_name);
+  //printf("Loading..Thread %d, %s release file lock\n",thread_current()->tid, thread_current()->name);
+  lock_release(&load_lock);
   if (!success)
   {
+    //initial thread같은 경우 sema_load를 안가지고 있으니
+    if(thread_current()->sema_load != NULL)
+    {
+      printf("start process: Thread %d, %s load sema up\n",thread_current()->tid, thread_current()->name);
+      sema_up(thread_current()->sema_load);
+    }
     thread_current()->is_load = false;
-    sema_up(thread_current()->sema_load);
     thread_exit ();
   }
 
   //argument도 로드가 잘되었는지 디버깅
-  hex_dump((uintptr_t)if_.esp , if_.esp , PHYS_BASE - if_.esp , true);
+  //hex_dump((uintptr_t)if_.esp , if_.esp , PHYS_BASE - if_.esp , true);
 
   /* If load successed */
   thread_current()->is_load = true;
-  sema_up(thread_current()->sema_load);
-
+  //initial thread같은 경우 sema_load를 안가지고 있으니 그 경우에도 sema_up이 되게 해준다.
+  if(thread_current()->sema_load != NULL)
+  {
+    printf("start process: Thread %d, %s load sema up\n",thread_current()->tid, thread_current()->name);
+    sema_up(thread_current()->sema_load);
+  }
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -118,27 +154,38 @@ process_wait (tid_t child_tid)
   int exit_status;
 
   if (child == NULL)
+  {
+    //printf ("WAIT ERROR]] CHILD NULL");
     return -1;
-  //만약 pid가 exit을 호출하지 않았는데 
-  //커널에 의해 종료되었다면(ex.예외상황에 걸려서 kill당했다던가) 
+  }  
+  //만약 기다리려고 했던 child_tid가 이미 exit된 상황이라면
+  //이미 커널에 의해 종료되었다면(ex.예외상황에 걸려서 kill당했다던가) 
   if (child->is_exit)
+  {
+    //printf ("WAIT ERROR]] EXCEPTION BY KERNEL");
     return -1;
+  }
+    
   //child_tid를 누군가가 이미 기다리고 있는 상황이라면 똑같은 child를 또 기다릴 수 없다.
   if (child->sema_exit != NULL)
+  {
+    //printf ("WAIT ERROR]] Already Waiting");
     return -1;
-
+  }
+    
   /*waiting*/ 
   //tid로 프로세스를 찾아서 그 프로세스에 sema를 넘겨줘야됨.
   sema_init(&sema_exit, 0);//부모의 세마포어 초기화
   child->sema_exit = &sema_exit;//자식에게 부모의 세마포어 넘겨주기
+  printf("process wait: Thread %d, %s exit sema down\n",thread_current()->tid, thread_current()->name);
   sema_down(&sema_exit);//부모가 블록되고 아까 process_execute에서 만든 유저프로세스 실행
   
   //자식 프로세스 실행을 마치면
   exit_status = child->exit_status;//자식의 exit status를 받아오고
   //유저 프로세스의 자식이든 initial thread의 자식인 유저프로세스이든
   //process_wait가 불리기 때문에 여기서 메모리 해제를 하면 된다.
+  //근데 child가 exit해서 메모리 안남아있을텐데?
   remove_child(child);
-  
   return exit_status;//자식의 exit status 반환
 }
 
@@ -179,6 +226,18 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+
+  int fd;
+  //open된 파일 디스크립터 모두 close해주기
+  for(fd = 2; fd <= cur->fd_idx; fd++)
+  {
+    close(fd);
+  }
+  //파일 디스크립터 배열 free하기
+  palloc_free_page(cur->fd_arr);
+
+  //실행파일을 file_close하면 실행파일 쓰기권한 원래대로 가능하게 돌리기도 됨.
+  file_close(cur->exefile);
 }
 
 /* Sets up the CPU for running user code in the current
@@ -260,6 +319,9 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
+
+#define MAX_FDCOUNT 128 /* count of maximum limit of file descriptor */
+
 static bool setup_stack (void **esp, char** argv, int argc);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
@@ -303,13 +365,21 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
   char* exe_name = argv[0];
 
+  //파일 여는 중에 실행파일이 수정 될 수도 있으니까 열기전에 락 걸기
+  //printf("Opening..Thread %d, %s acquire lock\n",thread_current()->tid, thread_current()->name);
+  //lock_acquire(&file_lock);
   /* Open executable file. */
   file = filesys_open (exe_name);
   if (file == NULL) 
     {
+      //lock_release(&file_lock);
       printf ("load: %s: open failed\n", exe_name);
       goto done; 
     }
+  //현재 이 스레드에서 실행되고 있는 실행파일을 넣어준다.
+  t->exefile = file;
+  //실행파일이 프로세스 실행중에는 편집되지 않도록 편집권한을 막는다.
+  file_deny_write(file);
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -382,6 +452,10 @@ load (const char *file_name, void (**eip) (void), void **esp)
           break;
         }
     }
+    
+  //파일 열기 끝났으니 락 풀기
+  //printf("Opening..Thread %d, %s release lock\n",thread_current()->tid, thread_current()->name);
+  //lock_release(&file_lock);
 
   /* Set up stack. */
   if (!setup_stack (esp, argv, argc))
@@ -394,8 +468,9 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  //file_close (file);
   return success;
+  
 }
 
 /* load() helpers. */
@@ -599,4 +674,64 @@ install_page (void *upage, void *kpage, bool writable)
      address, then map our page there. */
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
+}
+
+//파일 f에 대한 파일 디스크립터 생성+추가한 뒤 반환해주는 함수
+int
+add_file_desc(struct file* f)
+{
+  struct thread* cur = thread_current();
+  
+  //파일디스크립터를 추가할 위치를 찾는 방법: 비어있는 곳을 찾고
+  //그 위치의 index가 fd 최고 개수를 넘지 않을 때까지 돌아간다.
+  while(cur->fd_arr[cur->fd_idx] != 0 && cur->fd_idx < MAX_FDCOUNT)
+  {
+    cur->fd_idx++;
+  }
+
+  //그러다 만약 비어있는 위치가 없어서 최고개수를 넘었을 때, -1 반환
+  if(cur->fd_idx >= MAX_FDCOUNT)
+  {
+    //printf ("add fd ERROR]] Full FD");
+    return -1;
+  }
+    
+
+  //비어있는 위치를 찾아서 거기에 파일을 넣는다.
+  cur->fd_arr[cur->fd_idx] = f;
+
+  //파일을 넣은 위치(=파일 디스크립터)를 리턴한다.
+  return cur->fd_idx;
+}
+
+//파일 디스크립터 fd에 해당하는 파일을 반환해주는 함수
+struct file* 
+get_file_by_fd(int fd)
+{
+  struct thread* cur = thread_current();
+
+  //invalid fd
+  if (fd < 0 || fd >= MAX_FDCOUNT)
+  {
+    return NULL;
+  }
+  //valid fd
+  else
+  {
+    return cur->fd_arr[fd];
+  }
+}
+
+//파일 디스크립터 fd에 해당하는 배열 내용(파일 포인터)을 지워주는 함수
+void remove_fd(int fd)
+{
+  struct thread* cur = thread_current();
+
+  //invalid fd
+  if (fd < 0 || fd >= MAX_FDCOUNT)
+  {
+    return;
+  }
+
+  cur->fd_arr[fd] = NULL;
 }
