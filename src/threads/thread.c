@@ -190,24 +190,19 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
-  struct thread* cur = thread_current();
-  //현재 프로세스가 자식프로세스(name)를 만드는 중이므로 부모를 현재 프로세스로 초기화하기
-  t->parent = cur;
-  //exit 여부, load 여부 변수 초기화
-  t->is_exit = false;
-  t->is_load = false;
-  //자식 프로세스 t가 sema_up할 때까지 기다리는 semaphore, 아직 부모한테서 안받았으니 null로 초기화
-  t->sema_exit = NULL;
-  t->sema_load = NULL;
-  //부모 프로세스의 자식 리스트에 지금 만들고 있는 스레드(name)를 추가하기
-  list_push_back(&(cur->child_list), &t->child_elem);
+  struct thread* parent = thread_current();
+  //현재 프로세스가 자식프로세스(t)를 만드는 중이므로 
+	//자식 프로세스의 부모를 현재 프로세스로 초기화
+  t->parent = parent;
+  //부모 프로세스의 자식 리스트에 지금 만들고 있는 스레드(t)를 추가하기
+  list_push_back(&parent->child_list, &t->child_elem);
 
   //파일 디스크립터 배열 메모리 할당 및 초기화
   t->fd_arr = palloc_get_page(PAL_ZERO);
   if (t->fd_arr == NULL)
     return FILE_DESC_ERROR;
-  t->fd_idx = 2;//파일 디스크립터는 0,1은 표준입출력으로 예약되어있어서 2부터 시작이니까 2로 초기화
-
+  //파일 디스크립터는 0,1은 표준입출력으로 예약되어있어서 2부터 시작이니까 2로 초기화
+  t->fd_idx = 2;
 
   /* Prepare thread for first run by initializing its stack.
      Do this atomically so intermediate values for the 'stack' 
@@ -395,7 +390,7 @@ thread_exit (void)
   //문제가 생겨서 exit할때는 sema_exit이 sema_down되어있지 않을 수도 있다.
   if(thread_current()->sema_exit != NULL)
   {
-    printf("thread_exit: Thread %d, %s exit sema up\n",thread_current()->tid, thread_current()->name);
+    //printf("thread_exit: Thread %d, %s exit sema up\n",thread_current()->tid, thread_current()->name);
     sema_up(thread_current()->sema_exit);
   }
   thread_current ()->status = THREAD_DYING;
@@ -572,7 +567,16 @@ init_thread (struct thread *t, const char *name, int priority)
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
 
+  /* [Project2] Basic Initialization */
   list_init(&(t->child_list));
+  
+  //exit 여부, load 여부 변수 초기화
+  t->is_exit = false;
+  t->is_load = false;
+  //자식 프로세스인 t가 sema_up할 때까지 기다리는 semaphore다. 
+	//아직 부모한테서 받은 세마포어가 없으니 null로 초기화
+  t->sema_exit = NULL;
+  t->sema_load = NULL;
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and

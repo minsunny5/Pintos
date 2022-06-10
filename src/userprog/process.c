@@ -62,7 +62,7 @@ process_execute (const char *file_name)
   struct semaphore sema_load;
   sema_init(&sema_load, 0);
   child->sema_load = &sema_load;
-  printf("process execute: Thread %d, %s load sema down\n",thread_current()->tid, thread_current()->name);
+  //printf("process execute: Thread %d, %s load sema down\n",thread_current()->tid, thread_current()->name);
   sema_down(&sema_load);
 
   //대기를 마치고
@@ -107,7 +107,7 @@ start_process (void *file_name_)
     //initial thread같은 경우 sema_load를 안가지고 있으니
     if(thread_current()->sema_load != NULL)
     {
-      printf("start process: Thread %d, %s load sema up\n",thread_current()->tid, thread_current()->name);
+      //printf("start process: Thread %d, %s load sema up\n",thread_current()->tid, thread_current()->name);
       sema_up(thread_current()->sema_load);
     }
     thread_current()->is_load = false;
@@ -122,7 +122,7 @@ start_process (void *file_name_)
   //initial thread같은 경우 sema_load를 안가지고 있으니 그 경우에도 sema_up이 되게 해준다.
   if(thread_current()->sema_load != NULL)
   {
-    printf("start process: Thread %d, %s load sema up\n",thread_current()->tid, thread_current()->name);
+    //printf("start process: Thread %d, %s load sema up\n",thread_current()->tid, thread_current()->name);
     sema_up(thread_current()->sema_load);
   }
   /* Start the user process by simulating a return from an
@@ -160,7 +160,7 @@ process_wait (tid_t child_tid)
   }  
   //만약 기다리려고 했던 child_tid가 이미 exit된 상황이라면
   //이미 커널에 의해 종료되었다면(ex.예외상황에 걸려서 kill당했다던가) 
-  if (child->is_exit)
+  if (child->exit_status == -1)
   {
     //printf ("WAIT ERROR]] EXCEPTION BY KERNEL");
     return -1;
@@ -172,14 +172,19 @@ process_wait (tid_t child_tid)
     //printf ("WAIT ERROR]] Already Waiting");
     return -1;
   }
-    
-  /*waiting*/ 
+
+  //만약 자식이 아직 안 죽었다면 자식이 죽을 때까지 기다리기
+  if (child->is_exit == false) 
+  {
+    /*waiting*/ 
   //tid로 프로세스를 찾아서 그 프로세스에 sema를 넘겨줘야됨.
   sema_init(&sema_exit, 0);//부모의 세마포어 초기화
   child->sema_exit = &sema_exit;//자식에게 부모의 세마포어 넘겨주기
-  printf("process wait: Thread %d, %s exit sema down\n",thread_current()->tid, thread_current()->name);
+  //printf("process wait: Thread %d, %s exit sema down\n",thread_current()->tid, thread_current()->name);
   sema_down(&sema_exit);//부모가 블록되고 아까 process_execute에서 만든 유저프로세스 실행
+  }
   
+  //자식이 이미 죽었다면 exit status만 가져오면 됨.
   //자식 프로세스 실행을 마치면
   exit_status = child->exit_status;//자식의 exit status를 받아오고
   //유저 프로세스의 자식이든 initial thread의 자식인 유저프로세스이든
@@ -365,14 +370,10 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
   char* exe_name = argv[0];
 
-  //파일 여는 중에 실행파일이 수정 될 수도 있으니까 열기전에 락 걸기
-  //printf("Opening..Thread %d, %s acquire lock\n",thread_current()->tid, thread_current()->name);
-  //lock_acquire(&file_lock);
   /* Open executable file. */
   file = filesys_open (exe_name);
   if (file == NULL) 
     {
-      //lock_release(&file_lock);
       printf ("load: %s: open failed\n", exe_name);
       goto done; 
     }
@@ -452,10 +453,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
           break;
         }
     }
-    
-  //파일 열기 끝났으니 락 풀기
-  //printf("Opening..Thread %d, %s release lock\n",thread_current()->tid, thread_current()->name);
-  //lock_release(&file_lock);
 
   /* Set up stack. */
   if (!setup_stack (esp, argv, argc))

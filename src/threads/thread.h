@@ -20,7 +20,7 @@ enum thread_status
 typedef int tid_t;
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
 
-#define FILE_DESC_ERROR ((tid_t) -1)     /* Error value for file_desc_arr*/
+#define FILE_DESC_ERROR ((tid_t) -1)     /* Error value for file_desc_arr */
 
 /* Thread priorities. */
 #define PRI_MIN 0                       /* Lowest priority. */
