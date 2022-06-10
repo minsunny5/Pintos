@@ -17,9 +17,12 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/synch.h"
+#include "userprog/syscall.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -36,12 +39,41 @@ process_execute (const char *file_name)
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
-  strlcpy (fn_copy, file_name, PGSIZE);
+  strlcpy (fn_copy, file_name, PGSIZE); //strlcpy (dst, src, dst size);
 
+  /* Tokenize fn_copy2 to get exe name from file_name. */
+  char *exe_name, *save_ptr;
+
+  //strtok_r함수는 원본 문자열을 수정해버리니까 복사본을 만들어서 사용한다.
+  char fn_copy2[128];
+  strlcpy (fn_copy2, file_name, sizeof(fn_copy2));
+
+  exe_name = strtok_r (fn_copy2, " ", &save_ptr);
+  
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (exe_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+  {
+    palloc_free_page (fn_copy);
+  } 
+  
+  //생성된 자식 프로세스를 가져오기
+  struct thread* child = get_child_process(tid);
+
+  //sema_down()으로 자식 프로세스가 로드를 마칠때까지 대기하기
+  struct semaphore sema_load;
+  sema_init(&sema_load, 0);
+  child->sema_load = &sema_load;
+  sema_down(&sema_load);
+
+  //대기를 마치고
+  //프로그램 load 실패시, -1 반환
+  if(child->is_load == false)
+  {
+    return -1;
+  }
+
+  //프로그램 load 성공시, 자식 프로세스의 tid(=pid) 반환
   return tid;
 }
 
@@ -54,18 +86,38 @@ start_process (void *file_name_)
   struct intr_frame if_;
   bool success;
 
-  /* Initialize interrupt frame and load executable. */
+  /* Initialize interrupt frame */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
+
+  lock_init(&load_lock);
+  lock_acquire(&load_lock);
+  /* load executable. */
   success = load (file_name, &if_.eip, &if_.esp);
+  lock_release(&load_lock);
 
-  /* If load failed, quit. */
   palloc_free_page (file_name);
-  if (!success) 
+  /* If load failed, quit. */
+  if (!success)
+  {
+    //자식 프로세스가 로드 작업을 마쳤으니 sema_up해서 부모에게 결과를 알린다.
+    if(thread_current()->sema_load != NULL)
+    {
+      sema_up(thread_current()->sema_load);
+    }
+    thread_current()->is_load = false;
     thread_exit ();
+  }
 
+  /* If load successed */
+  thread_current()->is_load = true;
+  //자식 프로세스가 로드 작업을 마쳤으니 sema_up해서 부모에게 결과를 알린다.
+  if(thread_current()->sema_load != NULL)
+  {
+    sema_up(thread_current()->sema_load);
+  }
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -75,6 +127,8 @@ start_process (void *file_name_)
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED ();
 }
+
+
 
 /* Waits for thread TID to die and returns its exit status.  If
    it was terminated by the kernel (i.e. killed due to an
@@ -86,10 +140,60 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
-  return -1;
+  struct semaphore sema_exit;
+  struct thread* child = get_child_process(child_tid);
+  int exit_status;
+
+  /* 먼저 wait이 가능한 상황인지 확인한다.*/
+  if (child == NULL)
+  {
+    return -1;
+  } 
+
+  //child_tid(자식)이 이미 커널에 의해 종료되었다면(ex.예외상황에 걸려서 kill당했다던가) 
+  if (child->exit_status == -1)
+  {
+    return -1;
+  }
+    
+  //child_tid를 누군가가 이미 기다리고 있는 상황이라면 똑같은 child를 또 기다릴 수 없다.
+  if (child->sema_exit != NULL)
+  {
+    return -1;
+  }
+
+  /* 만약 자식이 아직 안 죽어서 wait이 가능한 상황이라면 자식이 죽을 때까지 대기 */
+  if (child->is_exit == false) 
+  {
+  /* waiting */ 
+  sema_init(&sema_exit, 0);//부모의 세마포어 초기화
+  child->sema_exit = &sema_exit;//자식에게 부모의 세마포어 넘겨주기
+  sema_down(&sema_exit);//부모가 블록되고 자식 프로세스 실행 마칠 때까지 대기
+  }
+  
+  //자식이 이미 죽었다면 기다릴 필요없이 exit status만 가져오면 됨.
+  //자식 프로세스 실행을 마치면
+  exit_status = child->exit_status;//자식의 exit status를 받아오고
+  //자식의 메모리 해제
+  remove_child(child);
+  return exit_status;//자식의 exit status 반환
 }
+
+void
+remove_child(struct thread* child)
+{
+  ASSERT (!list_empty(&child->parent->child_list));
+  //나의 부모 프로세스가 존재한다면 
+  if(child->parent != NULL)
+  {
+    //부모프로세스의 child list에서 (현재 exit하고 있는)본인을 제거한다.
+    list_remove(&child->child_elem);
+  }
+  palloc_free_page(child);//자식의 프로세스 디스크립터 메모리를 해제한다.
+}
+
 
 /* Free the current process's resources. */
 void
@@ -114,6 +218,18 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+
+  int fd;
+  //open된 파일 디스크립터 모두 close해주기
+  for(fd = 2; fd <= cur->fd_idx; fd++)
+  {
+    close(fd);
+  }
+  //파일 디스크립터 배열 free하기
+  palloc_free_page(cur->fd_arr);
+
+  //실행파일을 file_close하면 실행파일 쓰기권한 원래대로 가능하게 돌리기도 됨.
+  file_close(cur->exefile);
 }
 
 /* Sets up the CPU for running user code in the current
@@ -195,7 +311,10 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack (void **esp);
+
+#define MAX_FDCOUNT 128 /* count of maximum limit of file descriptor */
+
+static bool setup_stack (void **esp, char** argv, int argc);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -221,13 +340,35 @@ load (const char *file_name, void (**eip) (void), void **esp)
     goto done;
   process_activate ();
 
+  /* Tokenize file_name_copy to get exe name and arguments from file_name. */
+  char file_name_copy[128];
+  strlcpy (file_name_copy, file_name, strlen(file_name)+1);
+  char *token, *save_ptr;
+  int argc = 0; //arguments count
+  char *argv[128];//argument list
+
+  for (token = strtok_r (file_name_copy, " ", &save_ptr); token != NULL;
+        token = strtok_r (NULL, " ", &save_ptr))
+  {
+    argv[argc] = token;
+    argc++;
+  }
+
+  char* exe_name = argv[0];
+
   /* Open executable file. */
-  file = filesys_open (file_name);
+  file = filesys_open (exe_name);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      printf ("load: %s: open failed\n", exe_name);
       goto done; 
     }
+
+  //현재 이 스레드에서 실행되고 있는 실행파일을 넣어준다.
+  t->exefile = file;
+
+  //실행파일이 프로세스 실행중에는 편집되지 않도록 편집권한을 막는다.
+  file_deny_write(file);
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -302,7 +443,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp))
+  if (!setup_stack (esp, argv, argc))
     goto done;
 
   /* Start address. */
@@ -312,8 +453,8 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
   return success;
+  
 }
 
 /* load() helpers. */
@@ -425,22 +566,94 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 }
 
 /* Create a minimal stack by mapping a zeroed page at the top of
-   user virtual memory. */
+   user virtual memory. and Initialize stack with arguments. */
 static bool
-setup_stack (void **esp) 
+setup_stack (void **esp, char** argv, int argc) 
 {
+  /* Create a minimal stack by mapping a zeroed page at the top of
+   user virtual memory.*/
   uint8_t *kpage;
   bool success = false;
 
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
   if (kpage != NULL) 
+  {
+    success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+    if (success)
     {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success)
-        *esp = PHYS_BASE;
-      else
-        palloc_free_page (kpage);
+      /* esp(스택 포인터)를 유저가상메모리의 최상단으로 초기화 */
+      *esp = PHYS_BASE;
+
+      /* put arguments to stack */
+      char* arg_address_in_stack[argc]; // argument의 스택 내부 주소를 담는 배열
+      int i;
+
+      /* 1. argument data(내용) 넣기
+      argument를 스택에 넣기 전에 필요한 크기만큼 스택포인터를 아래로 내려서 
+      충분한 공간을 확보해야한다.*/
+      for (i = argc-1; i >= 0; i--)
+      {
+        // 문자열이니 널문자 넣을 공간도 있어야돼서 기존 문자열의 문자 개수 + 1
+        int arg_size = strlen(*(argv+i)) + 1;
+
+        // 문자 개수 * 1byte(sizeof(char))만큼 스택포인터를 내려준다.
+        *esp -= arg_size; 
+
+        // esp 내려서 생긴 공간에 argv[i]를 넣어준다.
+        memcpy(*esp, *(argv+i), arg_size); 
+
+        // argument를 넣을 때마다 넣은 위치를 arg_address_in_stack 배열에 기록한다.
+        arg_address_in_stack[i] = *esp; 
+      }
+
+      /* 2. argument data는 다 넣었는데 스택포인터의 위치가 4의 배수가 아닐 때 
+      성능 저하가 될 수 있으므로 word allign 해준다. */
+      while ((uint32_t)*esp % 4 != 0)
+      {
+        (*esp)--;
+
+        // 스택포인터의 위치가 4의 배수가 될 때까지 dummy값 0을 넣어준다.(padding)
+        memset(*esp, 0, sizeof(char));
+      }
+
+      /* 3. 이제 arg_address_in_stack(argument의 스택 내부 주소)을 스택에 넣어주자. */
+      for (i = argc; i >= 0; i--)
+      {
+        // 일단 주소(포인터라 다 4바이트짜리)를 넣을 공간부터 만들어야되니까 esp를 내려준다.
+        *esp -= 4;
+        
+        // 생긴 공간에 argument의 스택 내부 주소를 차례로 넣어준다. 
+        // 다만 argv[argc]인 경우에는 넣을 값이 없으므로 0을 넣는다.
+        if(i == argc)
+        {
+          memset(*esp, 0, sizeof(int*));
+        }
+        else
+        {
+          memcpy(*esp, &arg_address_in_stack[i], sizeof(uint32_t**));
+        }
+      }
+      
+      /* 4. argv 시작주소값(스택의 어디에 들어있는지)을 넣고 argc 넣으면 된다. */
+      // 먼저 공간 확보하고
+      *esp -= 4;
+
+      //아까 argv[0]를 저장한 시작 주소(현재 esp위치 기준 + 4)를 넣는다.
+      *(uintptr_t**)*esp = *esp + 4;
+
+      //argc넣을 공간을 확보하고 넣어준다.
+      *esp -= 4;
+      *(int*)*esp = argc;//원래 이것도 memset으로 했는데 0으로 초기화할 때 쓰는거아니면 문제생길 수 있대서 바꿈.
+
+      /* 5. 마지막에는 return address자리에 fake address 0을 넣어줘야한다. */
+      *esp -= 4;
+      memset(*esp, 0, sizeof(int*));
     }
+      
+    else
+      palloc_free_page (kpage);
+  }
+
   return success;
 }
 
@@ -462,4 +675,62 @@ install_page (void *upage, void *kpage, bool writable)
      address, then map our page there. */
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
+}
+
+/* 파일 f에 대한 파일 디스크립터 생성+추가한 뒤 반환해주는 함수 */
+int
+add_file_desc(struct file* f)
+{
+  struct thread* cur = thread_current();
+  
+  //파일디스크립터를 추가할 위치를 찾는다: 비어있는 곳을 찾고
+  //그 위치의 index가 fd 최고 개수를 넘지 않을 때까지 반복.
+  while(cur->fd_arr[cur->fd_idx] != 0 && cur->fd_idx < MAX_FDCOUNT)
+  {
+    cur->fd_idx++;
+  }
+
+  //그러다 만약 비어있는 위치가 없어서 최고개수를 넘었다면, -1 반환
+  if(cur->fd_idx >= MAX_FDCOUNT)
+  {
+    return -1;
+  }
+    
+  //비어있는 위치를 찾았으면 거기에 파일을 넣는다.
+  cur->fd_arr[cur->fd_idx] = f;
+
+  //파일을 넣은 위치(=파일 디스크립터)를 리턴한다.
+  return cur->fd_idx;
+}
+
+/* 파일 디스크립터 fd에 해당하는 파일을 반환해주는 함수 */
+struct file* 
+get_file_by_fd(int fd)
+{
+  struct thread* cur = thread_current();
+
+  //invalid fd
+  if (fd < 0 || fd >= MAX_FDCOUNT)
+  {
+    return NULL;
+  }
+  //valid fd
+  else
+  {
+    return cur->fd_arr[fd];
+  }
+}
+
+/* 파일 디스크립터 fd에 해당하는 배열 내용(파일 포인터)을 지워주는 함수 */
+void remove_fd(int fd)
+{
+  struct thread* cur = thread_current();
+
+  //invalid fd
+  if (fd < 0 || fd >= MAX_FDCOUNT)
+  {
+    return;
+  }
+
+  cur->fd_arr[fd] = NULL;
 }

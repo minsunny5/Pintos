@@ -3,13 +3,14 @@
 #include "filesys/inode.h"
 #include "threads/malloc.h"
 
-/* An open file. */
-struct file 
-  {
-    struct inode *inode;        /* File's inode. */
-    off_t pos;                  /* Current position. */
-    bool deny_write;            /* Has file_deny_write() been called? */
-  };
+// /* An open file. */
+// struct file 
+//   {
+//     struct inode *inode;        /* File's inode. */
+//     off_t pos;                  /* Current position. */
+//     bool deny_write;            /* Has file_deny_write() been called? */
+//   };
+//어차피 file.c의 전역변수로 쓰이는데 헤더파일로 옮기자.
 
 /* Opens a file for the given INODE, of which it takes ownership,
    and returns the new file.  Returns a null pointer if an

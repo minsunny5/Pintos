@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "threads/synch.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -19,11 +20,14 @@ enum thread_status
 typedef int tid_t;
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
 
+#define FILE_DESC_ERROR ((tid_t) -1)     /* Error value for file_desc_arr */
+
 /* Thread priorities. */
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
 
+#define USERPROG 1
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -81,27 +85,39 @@ typedef int tid_t;
    ready state is on the run queue, whereas only a thread in the
    blocked state is on a semaphore wait list. */
 struct thread
-  {
-    /* Owned by thread.c. */
-    tid_t tid;                          /* Thread identifier. */
-    enum thread_status status;          /* Thread state. */
-    char name[16];                      /* Name (for debugging purposes). */
-    uint8_t *stack;                     /* Saved stack pointer. */
-    int priority;                       /* Priority. */
-    struct list_elem allelem;           /* List element for all threads list. */
-    int64_t wakeUpTime; // 일어날 시간
+{
+   /* Owned by thread.c. */
+   tid_t tid;                          /* Thread identifier. */
+   enum thread_status status;          /* Thread state. */
+   char name[16];                      /* Name (for debugging purposes). */
+   uint8_t *stack;                     /* Saved stack pointer. */
+   int priority;                       /* Priority. */
+   struct list_elem allelem;           /* List element for all threads list. */
+   
+   int64_t wakeUpTime; // [project1] 일어날 시간
 
-    /* Shared between thread.c and synch.c. */
-    struct list_elem elem;              /* List element. */
+   int exit_status; // [project2] exit code
+   bool is_exit;
+   bool is_load;
+   struct thread* parent; //부모 프로세스
+   struct list child_list; //자식 프로세스 리스트
+   struct list_elem child_elem; // List element for child process list
+   struct semaphore* sema_exit; // 자식 프로세스를 기다리기 위해 사용하는 세마포어. exit()에서 up
+   struct semaphore* sema_load; // 자식 유저 프로세스가 실행파일을 로드하기까지 기다리기 위해 사용하는 세마포어. load()마치고 up
+   struct file** fd_arr;//파일의 포인터를 담는 배열,이 배열의 인덱스 = 파일 디스크립터
+   int fd_idx;//현존하는 파일 디스크립터 중 최대값
+   struct file* exefile;//현재 이 스레드에서 실행되고 있는 실행 파일
+   /* Shared between thread.c and synch.c. */
+   struct list_elem elem;              /* List element. */
 
 #ifdef USERPROG
-    /* Owned by userprog/process.c. */
-    uint32_t *pagedir;                  /* Page directory. */
+   /* Owned by userprog/process.c. */
+   uint32_t *pagedir;                  /* Page directory. */
 #endif
 
-    /* Owned by thread.c. */
-    unsigned magic;                     /* Detects stack overflow. */
-  };
+   /* Owned by thread.c. */
+   unsigned magic;                     /* Detects stack overflow. */
+};
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -117,6 +133,7 @@ void thread_print_stats (void);
 typedef void thread_func (void *aux);
 tid_t thread_create (const char *name, int priority, thread_func *, void *);
 
+//project1
 void thread_sleep (int64_t ticks);
 void thread_wakeup (int64_t ticks);
 
@@ -141,5 +158,8 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+//project2
+struct thread* get_child_process(tid_t pid);
 
 #endif /* threads/thread.h */

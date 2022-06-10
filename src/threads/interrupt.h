@@ -17,7 +17,7 @@ enum intr_level intr_enable (void);
 enum intr_level intr_disable (void);
 
 /* Interrupt stack frame. */
-struct intr_frame
+struct  intr_frame
   {
     /* Pushed by intr_entry in intr-stubs.S.
        These are the interrupted task's saved registers. */
@@ -28,7 +28,7 @@ struct intr_frame
     uint32_t ebx;               /* Saved EBX. */
     uint32_t edx;               /* Saved EDX. */
     uint32_t ecx;               /* Saved ECX. */
-    uint32_t eax;               /* Saved EAX. */
+    uint32_t eax;               /* Saved EAX. 불린 함수 Callee의 리턴값*/
     uint16_t gs, :16;           /* Saved GS segment register. */
     uint16_t fs, :16;           /* Saved FS segment register. */
     uint16_t es, :16;           /* Saved ES segment register. */

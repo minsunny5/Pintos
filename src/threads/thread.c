@@ -103,6 +103,7 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+  initial_thread->parent = NULL;
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -189,6 +190,21 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
+  struct thread* parent = thread_current();
+  //현재 프로세스가 자식프로세스(t)를 만드는 중이므로 
+	//자식 프로세스의 부모를 현재 프로세스로 초기화
+  t->parent = parent;
+  //부모 프로세스의 자식 리스트에 지금 만들고 있는 스레드(t)를 추가하기
+  list_push_back(&parent->child_list, &t->child_elem);
+
+  /* 파일 디스크립터 배열 메모리 할당 및 초기화 */
+  t->fd_arr = palloc_get_page(PAL_ZERO);
+  if (t->fd_arr == NULL)
+    return FILE_DESC_ERROR;
+
+  //파일 디스크립터는 0,1은 예약되어있어서 2부터 시작이니까 2로 초기화
+  t->fd_idx = 2;
+
   /* Prepare thread for first run by initializing its stack.
      Do this atomically so intermediate values for the 'stack' 
      member cannot be observed. */
@@ -216,6 +232,28 @@ thread_create (const char *name, int priority,
 
   return tid;
 }
+
+/* Search specific thread in current thread's child list by pid. 
+pid 프로세스가 child process list에 있다는 뜻 : 아직 exit되지 않았고
+*/
+struct thread*
+get_child_process(tid_t pid)
+{
+  struct thread* cur = thread_current();
+  struct list_elem *e;
+  for (e = list_begin(&cur->child_list); e != list_end(&cur->child_list); 
+      e = list_next(e))
+  {
+    struct thread* child = list_entry(e, struct thread, child_elem);
+    //pid인 프로세스를 찾았다면
+    if (child->tid == pid)
+    {
+      return child;
+    }
+  }
+  return NULL;
+}
+
 /*
 스레드 블락 시키는 것과 재우는 것은 용도가 다를 듯 해서 일단 따로 만듬.
 현재 스레드를 재우는 함수다.
@@ -346,6 +384,14 @@ thread_exit (void)
      when it calls thread_schedule_tail(). */
   intr_disable ();
   list_remove (&thread_current()->allelem);
+  
+  thread_current()->is_exit = true;
+  //자식 프로세스가 일을 마치고나면 sema_up()해줘서 
+  //아까 process_wait에서 sema down해놨던 부모 프로세스가 다시 unblock될 수 있게 sema up해준다.
+  if(thread_current()->sema_exit != NULL)
+  {
+    sema_up(thread_current()->sema_exit);
+  }
   thread_current ()->status = THREAD_DYING;
   schedule ();
   NOT_REACHED ();
@@ -517,6 +563,17 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
+
+  /* [Project2] Basic Initialization */
+  list_init(&(t->child_list));
+  
+  //exit 여부, load 여부 변수 초기화
+  t->is_exit = false;
+  t->is_load = false;
+  //자식 프로세스인 t가 sema_up할 때까지 기다리는 semaphore다. 
+	//아직 부모한테서 받은 세마포어가 없으니 null로 초기화
+  t->sema_exit = NULL;
+  t->sema_load = NULL;
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
@@ -588,7 +645,9 @@ thread_schedule_tail (struct thread *prev)
   if (prev != NULL && prev->status == THREAD_DYING && prev != initial_thread) 
     {
       ASSERT (prev != cur);
-      palloc_free_page (prev);
+      //palloc_free_page (prev);
+      //여러 함수(ex.process_wait)에서 자식의 exit code를 받아오기 위해 exit한 자식 스레드를 schedule한다고 삭제하지 않게 수정.
+      //대신 나중에 정보를 사용하는 함수(ex.process_wait)에서 정보를 사용하고 삭제한다.
     }
 }
 
