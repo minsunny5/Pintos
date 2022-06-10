@@ -7,10 +7,8 @@
 /* Process identifier. */
 typedef int pid_t;
 
-/* file's lock. 한번에 하나만 파일을 건드릴 수 있게 한다.*/
+/* file's lock. 한번에 하나만 파일을 건드릴 수 있게 한다. */
 struct lock file_lock;
-/* 실행파일의 락이다. 한번에 하나만 실행파일을 로드할 수 있게 한다.*/
-struct lock load_lock;
 
 void syscall_init (void);
 
